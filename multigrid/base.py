@@ -696,7 +696,7 @@ class MultiGridEnv(gym.Env, RandomMixin, ABC):
 
         return pos
 
-    def get_pov_render(self, *args, **kwargs):
+    def get_pov_render(self, render_type='cpu', *args, **kwargs):
         """
         Render an agent's POV observation for visualization.
         """
@@ -704,7 +704,7 @@ class MultiGridEnv(gym.Env, RandomMixin, ABC):
             "POV rendering not supported for multiagent environments."
         )
 
-    def get_full_render(self, highlight: bool, tile_size: int):
+    def get_full_render(self, highlight: bool, tile_size: int, render_type='cpu'):
         """
         Render a non-partial observation for visualization.
         """
@@ -747,11 +747,42 @@ class MultiGridEnv(gym.Env, RandomMixin, ABC):
                     highlight_mask[abs_i, abs_j] = True
 
         # Render the whole grid
-        img = self.grid.render(
-            tile_size,
-            agents=self.agents,
-            highlight_mask=highlight_mask if highlight else None,
-        )
+        if render_type == 'cpu':
+      
+            img = self.grid.render(
+                tile_size,
+                agents=self.agents,
+                highlight_mask=highlight_mask if highlight else None,
+            )
+        elif render_type == 'gpu_vectorized':
+            device = 'cuda'  # Assume CUDA is available
+            img = self.grid.render_gpu(
+                tile_size,
+                agents=self.agents,
+                highlight_mask=highlight_mask if highlight else None,
+                device=device,
+                use_vectorized=True,
+            )
+        elif render_type == 'gpu_simple':
+            device = 'cuda'  # Assume CUDA is available
+            img = self.grid.render_gpu(
+                tile_size,
+                agents=self.agents,
+                highlight_mask=highlight_mask if highlight else None,
+                device=device,
+                use_vectorized=False,
+            )
+        elif render_type == 'gpu_fully_parallel':
+            device = 'cuda'  # Assume CUDA is available
+            img = self.grid.render_gpu(
+                tile_size,
+                agents=self.agents,
+                highlight_mask=highlight_mask if highlight else None,
+                device=device,
+                use_fully_parallel=True,
+            )
+        else:
+            raise ValueError(f"Unknown render_type: {render_type}")
 
         return img
 
@@ -759,7 +790,9 @@ class MultiGridEnv(gym.Env, RandomMixin, ABC):
         self,
         highlight: bool = True,
         tile_size: int = TILE_PIXELS,
-        agent_pov: bool = False) -> ndarray[np.uint8]:
+        agent_pov: bool = False,
+        render_type: str = 'cpu',
+        ) -> ndarray[np.uint8]:
         """
         Returns an RGB image corresponding to the whole environment.
 
@@ -778,16 +811,15 @@ class MultiGridEnv(gym.Env, RandomMixin, ABC):
             A frame representing RGB values for the HxW pixel image
         """
         if agent_pov:
-            return self.get_pov_render(tile_size)
+            return self.get_pov_render(tile_size, render_type=render_type)
         else:
-            return self.get_full_render(highlight, tile_size)
+            return self.get_full_render(highlight, tile_size, render_type=render_type)
 
-    def render(self):
+    def render(self, render_type: str = 'cpu'):
         """
         Render the environment.
         """
-        img = self.get_frame(self.highlight, self.tile_size)
-
+        img = self.get_frame(self.highlight, self.tile_size, render_type=render_type)
         if self.render_mode == 'human':
             img = np.transpose(img, axes=(1, 0, 2))
             screen_size = (

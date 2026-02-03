@@ -274,6 +274,21 @@ class WorldObj(np.ndarray, metaclass=WorldObjMeta):
             RGB image array to render object on
         """
         raise NotImplementedError
+    
+    def render_gpu(self, img: ndarray[np.uint8], tile_size: int, device: Any):
+        """
+        Draw the world object using GPU.
+
+        Parameters
+        ----------
+        img : ndarray[int] of shape (width, height, 3)
+            RGB image array to render object on
+        tile_size : int
+            Size of the tile in pixels
+        device : torch.device
+            The device to perform rendering on
+        """
+        raise NotImplementedError
 
 
 class Goal(WorldObj):
@@ -295,6 +310,20 @@ class Goal(WorldObj):
         :meta private:
         """
         fill_coords(img, point_in_rect(0, 1, 0, 1), self.color.rgb())
+    
+    def render_gpu(self, img, device: str = 'cuda'):
+        """
+        GPU rendering for Goal object.
+        """
+        try:
+            import torch
+        except ImportError:
+            raise ImportError("PyTorch is required for GPU rendering")
+        
+        # Fill entire tile with color
+        color = torch.tensor(self.color.rgb(), dtype=torch.uint8, device=device)
+        img[:] = color
+        return img
 
 
 class Floor(WorldObj):
@@ -324,6 +353,25 @@ class Floor(WorldObj):
         # Give the floor a pale color
         color = self.color.rgb() / 2
         fill_coords(img, point_in_rect(0.031, 1, 0.031, 1), color)
+    
+    def render_gpu(self, img, device: str = 'cuda'):
+        """
+        GPU rendering for Floor object.
+        """
+        try:
+            import torch
+        except ImportError:
+            raise ImportError("PyTorch is required for GPU rendering")
+        
+        height, width = img.shape[:2]
+        # Give the floor a pale color
+        color = torch.tensor(self.color.rgb() / 2, dtype=torch.uint8, device=device)
+        
+        # Fill rect from 0.031 to 1.0 in both dimensions
+        y_start = int(0.031 * height)
+        x_start = int(0.031 * width)
+        img[y_start:, x_start:] = color
+        return img
 
 
 class Lava(WorldObj):
@@ -359,6 +407,42 @@ class Lava(WorldObj):
             fill_coords(img, point_in_line(0.3, yhi, 0.5, ylo, r=0.03), (0, 0, 0))
             fill_coords(img, point_in_line(0.5, ylo, 0.7, yhi, r=0.03), (0, 0, 0))
             fill_coords(img, point_in_line(0.7, yhi, 0.9, ylo, r=0.03), (0, 0, 0))
+    
+    def render_gpu(self, img, device: str = 'cuda'):
+        """
+        GPU rendering for Lava object (simplified).
+        """
+        try:
+            import torch
+        except ImportError:
+            raise ImportError("PyTorch is required for GPU rendering")
+        
+        height, width = img.shape[:2]
+        c = torch.tensor([255, 128, 0], dtype=torch.uint8, device=device)
+        
+        # Background color
+        img[:] = c
+        
+        # Little waves (simplified for GPU - draw as rectangles)
+        black = torch.tensor([0, 0, 0], dtype=torch.uint8, device=device)
+        for i in range(3):
+            ylo = 0.3 + 0.2 * i
+            yhi = 0.4 + 0.2 * i
+            thickness = max(1, int(0.03 * min(height, width)))
+            
+            # Approximate waves with rectangles
+            positions = [(0.1, ylo, 0.3, yhi), (0.3, yhi, 0.5, ylo), 
+                        (0.5, ylo, 0.7, yhi), (0.7, yhi, 0.9, ylo)]
+            for x0, y0, x1, y1 in positions:
+                y_center = int((y0 + y1) / 2 * height)
+                x_center = int((x0 + x1) / 2 * width)
+                y_min = max(0, y_center - thickness)
+                y_max = min(height, y_center + thickness)
+                x_min = max(0, x_center - thickness * 2)
+                x_max = min(width, x_center + thickness * 2)
+                img[y_min:y_max, x_min:x_max] = black
+        
+        return img
 
 
 class Wall(WorldObj):
@@ -381,6 +465,20 @@ class Wall(WorldObj):
         :meta private:
         """
         fill_coords(img, point_in_rect(0, 1, 0, 1), self.color.rgb())
+    
+    def render_gpu(self, img, device: str = 'cuda'):
+        """
+        GPU rendering for Wall object.
+        """
+        try:
+            import torch
+        except ImportError:
+            raise ImportError("PyTorch is required for GPU rendering")
+        
+        # Fill entire tile with color
+        color = torch.tensor(self.color.rgb(), dtype=torch.uint8, device=device)
+        img[:] = color
+        return img
 
 
 class Door(WorldObj):
@@ -499,6 +597,78 @@ class Door(WorldObj):
 
             # Draw door handle
             fill_coords(img, point_in_circle(cx=0.75, cy=0.50, r=0.08), c)
+    
+    def render_gpu(self, img, device: str = 'cuda'):
+        """
+        GPU rendering for Door object.
+        """
+        try:
+            import torch
+        except ImportError:
+            raise ImportError("PyTorch is required for GPU rendering")
+        
+        height, width = img.shape[:2]
+        c = torch.tensor(self.color.rgb(), dtype=torch.uint8, device=device)
+        black = torch.tensor([0, 0, 0], dtype=torch.uint8, device=device)
+        
+        if self.is_open:
+            # Draw open door on right edge
+            x_min = int(0.88 * width)
+            img[:, x_min:] = c
+            
+            x_min_inner = int(0.92 * width)
+            x_max_inner = int(0.96 * width)
+            y_min = int(0.04 * height)
+            y_max = int(0.96 * height)
+            img[y_min:y_max, x_min_inner:x_max_inner] = black
+        elif self.is_locked:
+            # Locked door
+            img[:] = c
+            
+            # Inner darker rectangle
+            y_min = int(0.06 * height)
+            y_max = int(0.94 * height)
+            x_min = int(0.06 * width)
+            x_max = int(0.94 * width)
+            dark_c = torch.tensor((0.45 * self.color.rgb()).astype(int), dtype=torch.uint8, device=device)
+            img[y_min:y_max, x_min:x_max] = dark_c
+            
+            # Key slot
+            y_min = int(0.50 * height)
+            y_max = int(0.56 * height)
+            x_min = int(0.52 * width)
+            x_max = int(0.75 * width)
+            img[y_min:y_max, x_min:x_max] = c
+        else:
+            # Closed unlocked door
+            img[:] = c
+            
+            # Layers of rectangles
+            y_min1 = int(0.04 * height)
+            y_max1 = int(0.96 * height)
+            x_min1 = int(0.04 * width)
+            x_max1 = int(0.96 * width)
+            img[y_min1:y_max1, x_min1:x_max1] = black
+            
+            y_min2 = int(0.08 * height)
+            y_max2 = int(0.92 * height)
+            x_min2 = int(0.08 * width)
+            x_max2 = int(0.92 * width)
+            img[y_min2:y_max2, x_min2:x_max2] = c
+            
+            y_min3 = int(0.12 * height)
+            y_max3 = int(0.88 * height)
+            x_min3 = int(0.12 * width)
+            x_max3 = int(0.88 * width)
+            img[y_min3:y_max3, x_min3:x_max3] = black
+            
+            # Door handle (circle approximation with square)
+            cy = int(0.50 * height)
+            cx = int(0.75 * width)
+            r = int(0.08 * min(height, width))
+            img[max(0, cy-r):min(height, cy+r), max(0, cx-r):min(width, cx+r)] = c
+        
+        return img
 
 
 class Key(WorldObj):
@@ -537,6 +707,57 @@ class Key(WorldObj):
         # Ring
         fill_coords(img, point_in_circle(cx=0.56, cy=0.28, r=0.190), c)
         fill_coords(img, point_in_circle(cx=0.56, cy=0.28, r=0.064), (0, 0, 0))
+    
+    def render_gpu(self, img, device: str = 'cuda'):
+        """
+        GPU rendering for Key object.
+        """
+        try:
+            import torch
+        except ImportError:
+            raise ImportError("PyTorch is required for GPU rendering")
+        
+        height, width = img.shape[:2]
+        c = torch.tensor(self.color.rgb(), dtype=torch.uint8, device=device)
+        black = torch.tensor([0, 0, 0], dtype=torch.uint8, device=device)
+        
+        # Vertical quad (main shaft)
+        y_min = int(0.31 * height)
+        y_max = int(0.88 * height)
+        x_min = int(0.50 * width)
+        x_max = int(0.63 * width)
+        img[y_min:y_max, x_min:x_max] = c
+        
+        # Teeth
+        y_min1 = int(0.59 * height)
+        y_max1 = int(0.66 * height)
+        x_min1 = int(0.38 * width)
+        x_max1 = int(0.50 * width)
+        img[y_min1:y_max1, x_min1:x_max1] = c
+        
+        y_min2 = int(0.81 * height)
+        y_max2 = int(0.88 * height)
+        img[y_min2:y_max2, x_min1:x_max1] = c
+        
+        # Ring (outer circle)
+        cy = int(0.28 * height)
+        cx = int(0.56 * width)
+        r_outer = int(0.190 * min(height, width))
+        r_inner = int(0.064 * min(height, width))
+        
+        # Create circle masks
+        y_coords = torch.arange(height, device=device, dtype=torch.float32)
+        x_coords = torch.arange(width, device=device, dtype=torch.float32)
+        yy, xx = torch.meshgrid(y_coords, x_coords, indexing='ij')
+        
+        dist_sq = (xx - cx) ** 2 + (yy - cy) ** 2
+        outer_mask = dist_sq <= (r_outer ** 2)
+        inner_mask = dist_sq <= (r_inner ** 2)
+        
+        img[outer_mask] = c
+        img[inner_mask] = black
+        
+        return img
 
 
 class Ball(WorldObj):
@@ -564,6 +785,34 @@ class Ball(WorldObj):
         :meta private:
         """
         fill_coords(img, point_in_circle(0.5, 0.5, 0.31), self.color.rgb())
+    
+    def render_gpu(self, img, device: str = 'cuda'):
+        """
+        GPU rendering for Ball object.
+        """
+        try:
+            import torch
+        except ImportError:
+            raise ImportError("PyTorch is required for GPU rendering")
+        
+        height, width = img.shape[:2]
+        color = torch.tensor(self.color.rgb(), dtype=torch.uint8, device=device)
+        
+        # Draw circle at center
+        cy = int(0.5 * height)
+        cx = int(0.5 * width)
+        r = int(0.31 * min(height, width))
+        
+        # Create circle mask
+        y_coords = torch.arange(height, device=device, dtype=torch.float32)
+        x_coords = torch.arange(width, device=device, dtype=torch.float32)
+        yy, xx = torch.meshgrid(y_coords, x_coords, indexing='ij')
+        
+        dist_sq = (xx - cx) ** 2 + (yy - cy) ** 2
+        mask = dist_sq <= (r ** 2)
+        
+        img[mask] = color
+        return img
 
 
 class Box(WorldObj):
@@ -614,3 +863,39 @@ class Box(WorldObj):
 
         # Horizontal slit
         fill_coords(img, point_in_rect(0.16, 0.84, 0.47, 0.53), self.color.rgb())
+    
+    def render_gpu(self, img, device: str = 'cuda'):
+        """
+        GPU rendering for Box object.
+        """
+        try:
+            import torch
+        except ImportError:
+            raise ImportError("PyTorch is required for GPU rendering")
+        
+        height, width = img.shape[:2]
+        c = torch.tensor(self.color.rgb(), dtype=torch.uint8, device=device)
+        black = torch.tensor([0, 0, 0], dtype=torch.uint8, device=device)
+        
+        # Outer outline
+        y_min1 = int(0.12 * height)
+        y_max1 = int(0.88 * height)
+        x_min1 = int(0.12 * width)
+        x_max1 = int(0.88 * width)
+        img[y_min1:y_max1, x_min1:x_max1] = c
+        
+        # Inner black rectangle
+        y_min2 = int(0.18 * height)
+        y_max2 = int(0.82 * height)
+        x_min2 = int(0.18 * width)
+        x_max2 = int(0.82 * width)
+        img[y_min2:y_max2, x_min2:x_max2] = black
+        
+        # Horizontal slit (in color)
+        y_min3 = int(0.47 * height)
+        y_max3 = int(0.53 * height)
+        x_min3 = int(0.16 * width)
+        x_max3 = int(0.84 * width)
+        img[y_min3:y_max3, x_min3:x_max3] = c
+        
+        return img

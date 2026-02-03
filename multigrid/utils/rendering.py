@@ -3,8 +3,18 @@ from __future__ import annotations
 import math
 import numpy as np
 from numpy.typing import NDArray as ndarray
-from typing import Callable
+from typing import Callable, TYPE_CHECKING
 
+try:
+    import torch
+    TORCH_AVAILABLE = True
+except ImportError:
+    TORCH_AVAILABLE = False
+    torch = None
+
+if TYPE_CHECKING:
+    if torch is not None:
+        from torch import Tensor
 
 
 # Constants
@@ -277,3 +287,127 @@ def highlight_img(
     blend_img = img + alpha * (np.array(color, dtype=np.uint8) - img)
     blend_img = blend_img.clip(0, 255).astype(np.uint8)
     img[:, :, :] = blend_img
+
+
+# GPU rendering functions
+
+if TORCH_AVAILABLE:
+    def downsample_gpu(img: 'Tensor', factor: int) -> 'Tensor':
+        """
+        Downsample an image on GPU using PyTorch.
+        
+        Parameters
+        ----------
+        img : Tensor of shape (height, width, 3)
+            The image to downsample
+        factor : int
+            The factor by which to downsample
+            
+        Returns
+        -------
+        Tensor of shape (height/factor, width/factor, 3)
+            The downsampled image
+        """
+        assert img.shape[0] % factor == 0
+        assert img.shape[1] % factor == 0
+        
+        # Reshape for averaging: (h, w, 3) -> (h//f, f, w//f, f, 3)
+        h, w, c = img.shape
+        img = img.reshape(h // factor, factor, w // factor, factor, c)
+        
+        # Average over factor dimensions
+        img = img.float().mean(dim=3).mean(dim=1)
+        
+        return img.to(torch.uint8)
+
+    def fill_coords_gpu(
+        img: 'Tensor',
+        mask: 'Tensor',
+        color: tuple[int, int, int]) -> 'Tensor':
+        """
+        Fill pixels of a GPU image based on a boolean mask.
+        
+        Parameters
+        ----------
+        img : Tensor of shape (height, width, 3)
+            The image to fill
+        mask : Tensor of shape (height, width)
+            Boolean mask indicating which pixels to fill
+        color : tuple[int, int, int]
+            RGB color to fill
+            
+        Returns
+        -------
+        Tensor of shape (height, width, 3)
+            The updated image
+        """
+        color_tensor = torch.tensor(color, dtype=torch.uint8, device=img.device)
+        img[mask] = color_tensor
+        return img
+
+    def highlight_img_gpu(
+        img: 'Tensor',
+        color: tuple[int, int, int] = (255, 255, 255),
+        alpha: float = 0.30) -> 'Tensor':
+        """
+        Add highlighting to a GPU image.
+        
+        Parameters
+        ----------
+        img : Tensor of shape (height, width, 3)
+            The image to highlight
+        color : tuple[int, int, int]
+            RGB color to use for highlighting
+        alpha : float
+            The alpha value to use for blending
+            
+        Returns
+        -------
+        Tensor of shape (height, width, 3)
+            The highlighted image
+        """
+        color_tensor = torch.tensor(color, dtype=torch.float32, device=img.device)
+        img_float = img.float()
+        blend_img = img_float + alpha * (color_tensor - img_float)
+        blend_img = blend_img.clamp(0, 255)
+        return blend_img.to(torch.uint8)
+
+    def create_grid_lines_mask_gpu(
+        height: int,
+        width: int,
+        device: str = 'cuda') -> 'Tensor':
+        """
+        Create a boolean mask for grid lines on GPU.
+        
+        Parameters
+        ----------
+        height : int
+            Image height in pixels
+        width : int
+            Image width in pixels
+        device : str
+            Device to create mask on
+            
+        Returns
+        -------
+        Tensor of shape (height, width)
+            Boolean mask with True for grid line pixels
+        """
+        # Create coordinate grids
+        y = torch.arange(height, device=device, dtype=torch.float32)
+        x = torch.arange(width, device=device, dtype=torch.float32)
+        
+        # Normalize coordinates
+        yf = (y + 0.5) / height
+        xf = (x + 0.5) / width
+        
+        # Create masks for grid lines (top and left edges)
+        # Top edge: x in [0, 0.031]
+        # Left edge: y in [0, 0.031]
+        x_mask = (xf >= 0) & (xf <= 0.031)
+        y_mask = (yf >= 0) & (yf <= 0.031)
+        
+        # Combine masks using broadcasting
+        mask = x_mask.unsqueeze(0) | y_mask.unsqueeze(1)
+        
+        return mask

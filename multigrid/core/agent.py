@@ -166,6 +166,84 @@ class Agent:
         tri_fn = rotate_fn(tri_fn, cx=0.5, cy=0.5, theta=0.5 * np.pi * self.state.dir)
         fill_coords(img, tri_fn, self.state.color.rgb())
 
+    def render_gpu(self, img, device: str = 'cuda'):
+        """
+        Draw the agent on GPU using PyTorch.
+
+        Parameters
+        ----------
+        img : torch.Tensor of shape (height, width, 3)
+            RGB image tensor to render agent on (on GPU)
+        device : str
+            Device to use ('cuda' or 'cpu')
+        """
+        try:
+            import torch
+        except ImportError:
+            raise ImportError("PyTorch is required for GPU rendering")
+        
+        height, width = img.shape[0], img.shape[1]
+        
+        # Create normalized coordinate grids - vectorized without unnecessary intermediate tensors
+        yf = (torch.arange(height, device=device, dtype=torch.float32) + 0.5) / height
+        xf = (torch.arange(width, device=device, dtype=torch.float32) + 0.5) / width
+        xf_grid, yf_grid = torch.meshgrid(xf, yf, indexing='ij')
+        
+        # Pre-compute rotation coefficients on CPU (they're scalars)
+        theta = 0.5 * np.pi * self.state.dir - np.pi / 2
+        cos_theta = np.cos(-theta)
+        sin_theta = np.sin(-theta)
+        
+        # Define and rotate triangle vertices in one vectorized operation
+        # Unrotated vertices
+        vertices = torch.tensor([
+            [0.12, 0.19],  # a
+            [0.87, 0.50],  # b
+            [0.12, 0.81],  # c
+        ], device=device, dtype=torch.float32)
+        
+        # Rotate all vertices at once around (0.5, 0.5)
+        cx, cy = 0.5, 0.5
+        vertices_centered = vertices - torch.tensor([cx, cy], device=device, dtype=torch.float32)
+        cos_t = torch.tensor(cos_theta, device=device, dtype=torch.float32)
+        sin_t = torch.tensor(sin_theta, device=device, dtype=torch.float32)
+        
+        # Rotation matrix applied vectorized
+        rotated_x = cx + vertices_centered[:, 0] * cos_t - vertices_centered[:, 1] * sin_t
+        rotated_y = cy + vertices_centered[:, 0] * sin_t + vertices_centered[:, 1] * cos_t
+        vertices_rot = torch.stack([rotated_x, rotated_y], dim=1)
+        
+        a_rot, b_rot, c_rot = vertices_rot[0], vertices_rot[1], vertices_rot[2]
+        
+        # Compute barycentric coordinates efficiently
+        v0 = c_rot - a_rot
+        v1 = b_rot - a_rot
+        v2_base = torch.stack([xf_grid, yf_grid], dim=-1) - a_rot
+        
+        # Vectorized dot products using element-wise multiplication and sum
+        dot00 = torch.dot(v0, v0)
+        dot01 = torch.dot(v0, v1)
+        dot02 = torch.sum(v0 * v2_base, dim=-1)
+        dot11 = torch.dot(v1, v1)
+        dot12 = torch.sum(v1 * v2_base, dim=-1)
+        
+        # Compute barycentric coordinates
+        inv_denom = 1.0 / (dot00 * dot11 - dot01 * dot01)
+        u = (dot11 * dot02 - dot01 * dot12) * inv_denom
+        v = (dot00 * dot12 - dot01 * dot02) * inv_denom
+        
+        # Compute mask efficiently with boolean operations
+        mask = (u >= 0) & (v >= 0) & ((u + v) <= 1)
+        
+        # Convert color to tensor once
+        color_rgb = self.state.color.rgb()
+        color_tensor = torch.tensor([int(c) for c in color_rgb], dtype=torch.uint8, device=device)
+        
+        # Vectorized color assignment
+        img[mask] = color_tensor
+        return img
+
+
 
 class AgentState(np.ndarray):
     """
