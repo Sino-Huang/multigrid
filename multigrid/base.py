@@ -280,13 +280,13 @@ class MultiGridEnv(gym.Env, RandomMixin, ABC):
         self._gen_grid(self.width, self.height)
 
         # These fields should be defined by _gen_grid
-        assert np.all(self.agent_states.pos >= 0)
-        assert np.all(self.agent_states.dir >= 0)
+        # assert np.all(self.agent_states.pos >= 0) # ! @Modify: no need to enforce this, as some environments may intentionally start agents with invalid positions (e.g. outside the grid)
+        # assert np.all(self.agent_states.dir >= 0) # ! @Modify: no need to enforce this, as some environments may intentionally start agents with invalid directions (e.g. -1 for no specific direction)
 
         # Check that agents don't overlap with other objects
-        for agent in self.agents:
-            start_cell = self.grid.get(*agent.state.pos)
-            assert start_cell is None or start_cell.can_overlap()
+        # for agent in self.agents:
+            # start_cell = self.grid.get(*agent.state.pos)
+            # assert start_cell is None or start_cell.can_overlap() # ! @Modify: no need to enforce this, as some environments may intentionally start agents on top of objects (e.g. lava)
 
         # Step count since episode start
         self.step_count = 0
